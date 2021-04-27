@@ -16,14 +16,12 @@
 
 package org.gradle.api.internal.tasks.compile;
 
-import org.gradle.api.tasks.compile.GroovyCompileOptions;
-
 import javax.annotation.Nullable;
 import java.io.File;
 import java.util.List;
 
 public interface GroovyCompileSpec extends JvmLanguageCompileSpec {
-    GroovyCompileOptions getGroovyCompileOptions();
+    MinimalGroovyCompileOptions getGroovyCompileOptions();
 
     List<File> getGroovyClasspath();
 

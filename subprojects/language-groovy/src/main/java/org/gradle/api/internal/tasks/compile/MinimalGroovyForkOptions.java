@@ -1,5 +1,5 @@
 /*
- * Copyright 2007-2008 the original author or authors.
+ * Copyright 2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,12 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.gradle.api.tasks.compile;
 
-/**
- * Fork options for Groovy compilation. Only take effect if {@code GroovyCompileOptions.fork}
- * is {@code true}.
- */
-public class GroovyForkOptions extends ProviderAwareForkOptions {
-    private static final long serialVersionUID = 0;
+package org.gradle.api.internal.tasks.compile;
+
+import org.gradle.api.tasks.compile.GroovyForkOptions;
+
+import java.io.Serializable;
+
+public class MinimalGroovyForkOptions extends MinimalBaseForkOptions implements Serializable {
+    public MinimalGroovyForkOptions(GroovyForkOptions forkOptions) {
+        super(forkOptions);
+        setJvmArgs(forkOptions.getAllJvmArgs());
+    }
 }
