@@ -18,7 +18,6 @@ package org.gradle.api.internal.tasks.compile.incremental.recomp;
 
 import org.gradle.api.internal.tasks.compile.incremental.processing.GeneratedResource;
 
-import java.io.File;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -29,7 +28,12 @@ public class RecompilationSpec {
     private final Collection<String> classesToProcess = new LinkedHashSet<>();
     private final Collection<GeneratedResource> resourcesToGenerate = new LinkedHashSet<>();
     private final Set<String> relativeSourcePathsToCompile = new LinkedHashSet<>();
+    private final PreviousCompilation previousCompilation;
     private String fullRebuildCause;
+
+    public RecompilationSpec(PreviousCompilation previousCompilation) {
+        this.previousCompilation = previousCompilation;
+    }
 
     @Override
     public String toString() {
@@ -50,6 +54,10 @@ public class RecompilationSpec {
 
     public Collection<String> getClassesToCompile() {
         return Collections.unmodifiableCollection(classesToCompile);
+    }
+
+    public PreviousCompilation getPreviousCompilation() {
+        return previousCompilation;
     }
 
     public void addRelativeSourcePathsToCompile(String path) {
@@ -91,8 +99,8 @@ public class RecompilationSpec {
         return fullRebuildCause;
     }
 
-    public void setFullRebuildCause(String description, File file) {
-        fullRebuildCause = description != null ? description : "'" + file.getName() + "' was changed";
+    public void setFullRebuildCause(String description) {
+        fullRebuildCause = description;
     }
 
 }

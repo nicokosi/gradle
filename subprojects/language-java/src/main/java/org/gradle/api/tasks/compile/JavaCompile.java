@@ -37,7 +37,6 @@ import org.gradle.api.internal.tasks.compile.JavaCompileSpec;
 import org.gradle.api.internal.tasks.compile.incremental.IncrementalCompilerFactory;
 import org.gradle.api.internal.tasks.compile.incremental.recomp.DefaultSourceFileClassNameConverter;
 import org.gradle.api.internal.tasks.compile.incremental.recomp.FileNameDerivingClassNameConverter;
-import org.gradle.api.internal.tasks.compile.incremental.recomp.IncrementalCompilationResult;
 import org.gradle.api.internal.tasks.compile.incremental.recomp.JavaRecompilationSpecProvider;
 import org.gradle.api.internal.tasks.compile.incremental.recomp.SourceFileClassNameConverter;
 import org.gradle.api.jvm.ModularitySpec;
@@ -50,9 +49,9 @@ import org.gradle.api.tasks.CompileClasspath;
 import org.gradle.api.tasks.IgnoreEmptyDirectories;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputFiles;
-import org.gradle.api.tasks.LocalState;
 import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.Optional;
+import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.SkipWhenEmpty;
@@ -82,7 +81,6 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 import static com.google.common.base.Preconditions.checkState;
-import static org.gradle.api.internal.tasks.compile.SourceClassesMappingFileAccessor.mergeIncrementalMappingsIntoOldMappings;
 import static org.gradle.api.internal.tasks.compile.SourceClassesMappingFileAccessor.readSourceClassesMappingFile;
 
 /**
@@ -105,6 +103,7 @@ public class JavaCompile extends AbstractCompile implements HasCompileOptions {
     private final FileCollection stableSources = getProject().files((Callable<FileTree>) this::getSource);
     private final ModularitySpec modularity;
     private File sourceClassesMappingFile;
+    private File previousCompilationDataFile;
     private final Property<JavaCompiler> javaCompiler;
     private final ObjectFactory objectFactory;
 
@@ -162,33 +161,37 @@ public class JavaCompile extends AbstractCompile implements HasCompileOptions {
 
     private void performIncrementalCompilation(InputChanges inputs, DefaultJavaCompileSpec spec) {
         boolean isUsingCliCompiler = isUsingCliCompiler(spec);
+        spec.getCompileOptions().setSupportsCompilerApi(!isUsingCliCompiler);
+        spec.getCompileOptions().setSupportsConstantAnalysis(!isUsingCliCompiler);
+
+        // Read sources mapping
         File sourceClassesMappingFile = getSourceClassesMappingFile();
         Multimap<String, String> oldMappings;
         SourceFileClassNameConverter sourceFileClassNameConverter;
-        if (isUsingCliCompiler) {
-            oldMappings = null;
-            sourceFileClassNameConverter = new FileNameDerivingClassNameConverter();
-        } else {
+        if (spec.getCompileOptions().supportsCompilerApi()) {
             oldMappings = readSourceClassesMappingFile(sourceClassesMappingFile);
             sourceFileClassNameConverter = new DefaultSourceFileClassNameConverter(oldMappings);
+        } else {
+            oldMappings = null;
+            sourceFileClassNameConverter = new FileNameDerivingClassNameConverter();
         }
         sourceClassesMappingFile.delete();
         spec.getCompileOptions().setIncrementalCompilationMappingFile(sourceClassesMappingFile);
+        spec.getCompileOptions().setPreviousIncrementalCompilationMapping(oldMappings);
+        spec.getCompileOptions().setPreviousCompilationDataFile(previousCompilationDataFile);
+
         Compiler<JavaCompileSpec> compiler = createCompiler();
-        compiler = makeIncremental(inputs, sourceFileClassNameConverter, (CleaningJavaCompiler<JavaCompileSpec>) compiler, getStableSources().getAsFileTree());
-        WorkResult workResult = performCompilation(spec, compiler);
-        if (workResult instanceof IncrementalCompilationResult && !isUsingCliCompiler) {
-            // The compilation will generate the new mapping file
-            // Only merge old mappings into new mapping on incremental recompilation
-            mergeIncrementalMappingsIntoOldMappings(sourceClassesMappingFile, getStableSources(), inputs, oldMappings);
-        }
+        compiler = makeIncremental(inputs, sourceFileClassNameConverter, (CleaningJavaCompiler<JavaCompileSpec>) compiler, getStableSources());
+        performCompilation(spec, compiler);
     }
 
-    private Compiler<JavaCompileSpec> makeIncremental(InputChanges inputs, SourceFileClassNameConverter sourceFileClassNameConverter, CleaningJavaCompiler<JavaCompileSpec> compiler, FileTree sources) {
+    private Compiler<JavaCompileSpec> makeIncremental(InputChanges inputs, SourceFileClassNameConverter sourceFileClassNameConverter, CleaningJavaCompiler<JavaCompileSpec> compiler, FileCollection stableSources) {
+        FileTree sources = stableSources.getAsFileTree();
         return getIncrementalCompilerFactory().makeIncremental(
             compiler,
-            getPath(),
             sources,
+            stableSources,
+            inputs,
             createRecompilationSpec(inputs, sourceFileClassNameConverter, sources)
         );
     }
@@ -282,19 +285,30 @@ public class JavaCompile extends AbstractCompile implements HasCompileOptions {
     }
 
     /**
-     * The Groovy source-classes mapping file. Internal use only.
+     * The source-classes mapping file. Internal use only.
      *
      * @since 6.5
      */
-    @LocalState
+    @OutputFile
     protected File getSourceClassesMappingFile() {
         if (sourceClassesMappingFile == null) {
-            File tmpDir = getServices().get(TemporaryFileProvider.class).newTemporaryFile(getName());
-            sourceClassesMappingFile = new File(tmpDir, "source-classes-mapping.txt");
+            sourceClassesMappingFile = new File(getTemporaryDirWithoutCreating(), "source-classes-mapping.txt");
         }
         return sourceClassesMappingFile;
     }
 
+    /**
+     * The previous compilation analysis. Internal use only.
+     *
+     * @since 7.1
+     */
+    @OutputFile
+    protected File getPreviousCompilationData() {
+        if (previousCompilationDataFile == null) {
+            previousCompilationDataFile = new File(getTemporaryDirWithoutCreating(), "previous-compilation-data.bin");
+        }
+        return previousCompilationDataFile;
+    }
 
     private WorkResult performCompilation(JavaCompileSpec spec, Compiler<JavaCompileSpec> compiler) {
         WorkResult result = new CompileJavaBuildOperationReportingCompiler(this, compiler, getServices().get(BuildOperationExecutor.class)).execute(spec);
@@ -389,6 +403,11 @@ public class JavaCompile extends AbstractCompile implements HasCompileOptions {
             spec.setSourceCompatibility(getSourceCompatibility());
         }
         spec.setCompileOptions(compileOptions);
+    }
+
+    private File getTemporaryDirWithoutCreating() {
+        // Do not create the temporary folder, since that causes problems.
+        return getServices().get(TemporaryFileProvider.class).newTemporaryFile(getName());
     }
 
     /**
